@@ -122,7 +122,7 @@ int main() {
 }
 ```
 
-**RP2040有2个PIO块，每个PIO有四个状态机。**每个PIO都有一块能够容纳32条指令的指令内存，且能够被四个状态机共享。我们首先在状态机运行之前把我们的程序加载进指令内存，使用`pio_add_program(pio, &hello_program)`。
+**RP2040有2个PIO块，每个PIO有四个状态机。** 每个PIO都有一块能够容纳32条指令的指令内存，且能够被四个状态机共享。我们首先在状态机运行之前把我们的程序加载进指令内存，使用`pio_add_program(pio, &hello_program)`。
 
 > 32条指令听起来很少，但PIO程序密度实际上很高，一个完美的UART程序4条指令就可以实现，可以去看`pico_examples`里面的`pio/uart_tx`。
 
@@ -229,7 +229,7 @@ bitloop:
 * `side 0`驱动side-set引脚为低电平。
 * `;`后面的都是注释，汇编器忽略它们。
 
-> OSR是从TX FIFO取出数据过渡地带，数据一个字一个字地从TX FIFO移入OSR，一个字是32位。`out`指令通过移位操作把数据分成小片，并把移出地数据发送到几个不同的目的地（例如引脚）。
+> OSR是从TX FIFO取出数据过渡地带，数据一个字一个字地从TX FIFO移入OSR，一个字是32位。`out`指令通过移位操作把数据分成小片，并把移出的数据发送到几个不同的目的地（例如引脚）。
 > 移出的位数由`out`指令记录，方向要提前设置好，详情请看后面的PIO编程模型的相关部分。
 
 所有状态机在执行上面这条指令时会进行以下操作：
@@ -373,7 +373,7 @@ static inline void ws2812_program_init(PIO pio, uint sm, uint offset, uint pin, 
 * `pio_gpio_init(pio, pin);`配置GPIO功能，告知其用于PIO。
 * `pio_set_consecutive_pindirs(pio, sm, pin, 1, true);`设置从`pin`开始的1个引脚输入输出方向为输出。
 * `pio_sm_config c = ws2812_program_default_config(offset);`使用此程序的默认配置生成函数获取一个默认配置。默认配置包括`.wrap`和`.side_set`这样的信息。在把它加载进状态机之前还需要进一步的配置。
-* `sm_config_sideset_pins(&c, pin);`设置side-set引脚组的引脚从`pin`开始。side-set引脚数量是在`.pio`文件里面的`.side-set n`指定的，如果在PIO程序里面设置了n个side-set引脚，那么side-set引脚组就会包含`pin`，`pin+1`，`pin+2`，...，`pin+n`。
+* `sm_config_sideset_pins(&c, pin);`设置side-set引脚组的引脚从`pin`开始。side-set引脚数量是在`.pio`文件里面的`.side-set n`指定的，如果在PIO程序里面设置了n个side-set引脚，那么side-set引脚组就会包含`pin`，`pin+1`，`pin+2`，...，`pin+n-1`。
 * `sm_config_out_shift(&c, false, true, rgbw ? 32 : 24);`false表示从右向左移动，也就是说大端（most significant bit，MSB）先移出。true表示开启autopull。32或者24表示autopull触发的移出阈值（即可以移出的最大位数，到了这个位数就会自动重填），由`rgbw`决定。
 * `int cycles_per_bit = ws2812_T1 + ws2812_T2 + ws2812_T3;`是发送每个比特需要的时钟周期数。这就体现出`.define public`好处了，我们可以直接在C程序里面使用T1、T2、T3。
 * `float div = clock_get_hz(clk_sys) / (freq * cycles_per_bit); sm_config_clkdiv(&c, div);`根据系统时钟和所需要的发送频率来降低状态机所使用的时钟频率。
@@ -797,3 +797,91 @@ PUBLIC <symbol>:
 
 在行首。标签本质上是用`.define`定义了一个标识符，其值为指令在指令内存中的偏移量。*PUBLIC*标签就是*.define PUBLIC*。
 
+## 指令集
+
+PIO指令有16bit长，编码如下：
+
+![pico-pio-instructions.svg](images/pico-pio-instructions.svg)
+
+所有PIO指令都只需要一个时钟周期。
+
+5个比特的`Delay/side-set`位域的功能根据状态机的`SIDESET_COUNT`而定：
+
+* 最多5个低位（`5 - SIDESET_COUNT`）用于表示延迟时间长度为多少个时钟周期。
+* 最多5个高位（即`SIDESET_COUNT`的值）用于表示side-set，在执行指令的同时向某些引脚输出电平。
+
+### JMP
+
+#### 操作
+
+如果条件为真，把PC设置为指定的地址，否则什么都不做。
+
+无论条件真假，该指令总是占用一个时钟周期，延迟（若有）也总是生效。延迟发生在判断条件并设置PC之后。
+
+* 条件可以是：
+  * 000：无条件跳转
+  * 001：`!X`：寄存器X值为0
+  * 010：`X--`：寄存器X的值在自减之前非0
+  * 011：`!Y`：寄存器Y值为0
+  * 100：`Y--`：寄存器Y的值在自减之前非0
+  * 101：`X!=Y`：X的值和Y的值不相等、
+  * 110：`PIN`：根据输入引脚跳转
+  * 111：`!OSRE`：OSR非空
+* 地址：要跳转到的指令地址。有5位，因此这是在指令内存中的绝对地址（指令内存只有32条指令大小，正好可以用5位地址索引）。
+
+`JMP PIN`根据`EXECCTRL_JMP_PIN`所选定的GPIO跳转，`EXECCTRL_JMP_PIN`选择状态机可见的32个GPIO输入中最大的一个引脚（译注：这里有歧义，原文似乎也可以翻译为“从最多32个对状态机可见的GPIO输入中选择一个”。一种理解是，32个引脚有部分对状态机可见，`EXECCTRL_JMP_PIN`选择其中最大的一个；另一种理解是，最多有32个引脚对状态机可见，`EXECCTRL_JMP_PIN`选择其中任意一个。根源在于原文的“maximum”到底修饰“GPIO”还是修饰“32”。），它和其他输入映射独立。如果引脚为高电平，则跳转生效。
+
+`!OSRE`比较自从上次`PULL`之后移出的位数和`SHIFTCTRL_PULL_THRESH`所配置的移出计数阈值。autopull同样使用这个阈值。
+
+`JMP X--` 和`JMP Y--`分别在X和Y寄存器上减一，自减并不是按条件的，但跳转是根据寄存器自减前的值条件判断的。若寄存器的值一开始不是0，那么就会跳转。
+
+#### 汇编语法
+
+*jmp ( \<cond\> ) \<target\>*
+
+其中：
+
+*\<cond\>*是可选的，若没有指定，则无条件跳转。
+
+*\<target\>*是一个标签或者值，代表指令在program中的偏移量，第一条指令的偏移量为0（译注：这里和前面所说的“绝对地址”不一样，这里的*\<target\>*和指令机器码中的地址域不是同一个值，机器码地址域是绝对地址，指令语法使用相对地址）。注意因为JMP指令机器码使用绝对地址，运行时JMP指令会根据program在指令内存中的偏移量进行调整。这是在program加载进指令内存时完成的，使用`OUT EXEC`来编码指令时需要小心这一点。
+
+### WAIT
+
+#### 操作
+
+暂停直到某些条件满足为止。
+
+像所有暂停指令一样，延迟周期在指令执行完之后开始。也就是说，无论有多少个延迟周期，都会等到条件满足之后才开始计数。
+
+* Polarity（极性）：
+  * 1：等待1
+  * 0：等待0
+* Source（源）：等待什么。可以是：
+  * 00：`GPIO`：由`Index`选择的系统GPIO输入。这是一个绝对的GPIO编号，不受状态机输入映射影响。
+  * 01：`PIN`：由`Index`选择的输入引脚。首先设置好状态机的输入映射，然后`Index`选择等待哪个映射的位。换句话说，就是把`Index`和`PINCTRL_IN_BASE`（输入引脚组的起始引脚）加起来，再取余32。
+  * 10：`IRQ`：由`Index`选择的PIO中断标志位。
+  * 11：保留。
+* Index：监测哪个引脚或比特位。
+
+`WAIT x IRQ`和其他`WAIT`源表现有所不同：
+
+* 如果`Polarity`为1，当条件满足时所选择的中断标志位会被状态机清零。
+* 标志索引的解码方法与`IRQ`指令的索引域相同：若最高位被设置，状态机的编号（0，1，2，或3）会以对两个最低位进行模4加的方式被加到中断索引上。例如状态机2的标志值为0x11，则等待标志3；标志值为0x13，则等待标志1。这允许多个状态机运行同一个程序并保持同步。
+
+> `WAIT 1 IRQ x`不应该和中断控制器的中断标志使用，以避免竞争。
+
+#### 汇编语法
+
+*wait \<polarity\> gpio \<gpio_num\>*
+*wait \<polarity\> pin \<pin_num\>*
+*wait \<polarity\> irq \<irq_num\> ( rel )*
+
+其中，
+
+*\<polarity\>*指定Polarity位域；
+
+*\<pin_num\>*指定输入引脚编号（基于状态机输入引脚映射）；
+
+*\<gpio_num\>*指定实际GPIO编号；
+
+*\<irq_num\>*指定中断号（0~7）。若指定了*rel*，实际的中断号通过把中断号低两位替换为中断号低两位和状态机编号低两位模4加之后的结果得到，即把irq_num<sub>10</sub>替换为(irq_num<sub>10</sub>+sm_num<sub>10</sub>)。
