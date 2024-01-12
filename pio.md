@@ -616,7 +616,7 @@ public entry_point:
 * 如果autopush开启，一旦达到某个总移位计数阈值（一般是ISR已满），状态机遇到`IN`就会先`PUSH`一次。
 * 移位可以是左移也可以是右移，根据配置决定。
 
-有些设备，如UART，必须从左移入，因为它的数据顺序是小端（Least Significant Bit，LSB）先；然而处理器可能更希望右对齐。这可以用特殊的输入源`null`来解决，它允许向ISR移入一些0，追加在数据之后。
+有些设备，如UART，必须从左向右移入，因为它的数据顺序是小端（Least Significant Bit，LSB）先；然而处理器可能更希望右对齐。这可以用特殊的输入源`null`来解决，它允许向ISR移入一些0，追加在数据之后。
 
 #### 移位计数器（Shift Counters）
 
@@ -777,7 +777,7 @@ PIO汇编编译器（我有时也翻译成汇编器）解析`.pio`文件并输�
 
 ### 表达式
 
-除了加`+`减`-`乘`*`除`/`以及负号`-`以外，还有取反（`::`）运算符。
+除了加`+`减`-`乘`*`除`/`以及负号`-`以外，还有反序（`::`）运算符。
 
 ### 注释
 
@@ -824,7 +824,7 @@ PIO指令有16bit长，编码如下：
   * 010：`X--`：寄存器X的值在自减之前非0
   * 011：`!Y`：寄存器Y值为0
   * 100：`Y--`：寄存器Y的值在自减之前非0
-  * 101：`X!=Y`：X的值和Y的值不相等、
+  * 101：`X!=Y`：X的值和Y的值不相等
   * 110：`PIN`：根据输入引脚跳转
   * 111：`!OSRE`：OSR非空
 * 地址：要跳转到的指令地址。有5位，因此这是在指令内存中的绝对地址（指令内存只有32条指令大小，正好可以用5位地址索引）。
@@ -872,16 +872,216 @@ PIO指令有16bit长，编码如下：
 
 #### 汇编语法
 
-*wait \<polarity\> gpio \<gpio_num\>*
-*wait \<polarity\> pin \<pin_num\>*
-*wait \<polarity\> irq \<irq_num\> ( rel )*
+*wait \<polarity\> gpio \<gpio_num\>*  
+*wait \<polarity\> pin \<pin_num\>*  
+*wait \<polarity\> irq \<irq_num\> ( rel )*   
 
 其中，
 
-*\<polarity\>*指定Polarity位域；
+*\<polarity\>* 指定Polarity位域；
 
-*\<pin_num\>*指定输入引脚编号（基于状态机输入引脚映射）；
+*\<pin_num\>* 指定输入引脚编号（基于状态机输入引脚映射）；
 
-*\<gpio_num\>*指定实际GPIO编号；
+*\<gpio_num\>* 指定实际GPIO编号；
 
-*\<irq_num\>*指定中断号（0~7）。若指定了*rel*，实际的中断号通过把中断号低两位替换为中断号低两位和状态机编号低两位模4加之后的结果得到，即把irq_num<sub>10</sub>替换为(irq_num<sub>10</sub>+sm_num<sub>10</sub>)。
+*\<irq_num\>* 指定中断号（0~7）。若指定了*rel* ，实际的中断号通过把中断号低两位替换为中断号低两位和状态机编号低两位模4加之后的结果得到，即把irq_num<sub>10</sub>替换为(irq_num<sub>10</sub>+sm_num<sub>10</sub>)。
+
+### IN
+
+#### 操作
+
+从Source中移出`Bit count`个比特放进ISR中。每个状态机的移位方向由各自的`SHIFTCTRL_IN_SHIFTDIR`配置。另外输入移位计数器的值增加`Bit count`，计数器上限为32。
+
+* Source：
+  * 000：`PINS`
+  * 001：暂存寄存器`X`
+  * 010：暂存寄存器`Y`
+  * 011：`NULL`（全0）
+  * 100：保留
+  * 101：保留
+  * 110：ISR
+  * 111：OSR
+* Bit count：要移出多少个比特。范围1~32，其中32编码为`00000`。
+
+若开启了autopush，`IN`在达到了移位阈值（`SHIFTCTRL_PUSH_THRESH`）时会自动把ISR数据push到RX FIFO。无论是否自动push，`IN`始终只使用1个时钟周期。若自动push时发现RX FIFO已满，状态机暂停。自动push把ISR和输入移位计数器清零。
+
+`IN`总是使用源数据的低`Bit count`位，例如，若`PINCTRL_IN_BASE`为5，指令`IN PINS, 3`会选择引脚5, 6和7，把这三个引脚数据放进ISR。首先ISR中已有数据进行移位以留出空间让新数据进入，然后新数据会被拷贝到这个空间。输入数据的比特顺序与移位方向无关。
+
+`NULL`用来移动ISR中内容的位置。例如，UART需要小端先，所以必须向右移；在8次`IN PINS, 1`之后，输入的串行数据会占据ISR的第31~24位，这时一条`IN NULL, 24`移入24个0，把输入数据对齐到第7~0位。另一种方法是处理器或者DMA可以对FIFO地址+3使用字节读取，将会选择FIFO内容的第31~24位。
+
+#### 汇编语法
+
+*in \<source\>, \<bit_count\>*  
+
+其中：
+
+*\<source\>* 是上面列出的源操作数。
+
+*\<bit_count\>* 指定移入位数（范围1~32）。
+
+### OUT
+
+#### 操作
+
+从OSR中移出`Bit count`个比特写进Destination中。另外输出移位计数器的值增加`Bit count`，计数器上限为32。
+
+* Destination：
+  * 000：`PINS`
+  * 001：暂存寄存器`X`
+  * 010：暂存寄存器`Y`
+  * 011：`NULL`（删除数据）
+  * 100：`PINDIRS`
+  * 101：`PC`
+  * 110：`ISR`（同时设置输入移位寄存器为`Bit count`）
+  * 111：`EXEC`（把OSR数据当作指令运行）
+* Bit count：从OSR移出多少比特。范围1~32，其中32编码为`00000`。
+
+一个32位的值将被写入Destination：低`Bit count`位来自OSR，高位全为0。若`SHIFTCTRL_OUT_SHIFTDIR`为向右，则这个值采用OSR的低`Bit count`位，否则是高`Bit count`位。
+
+`PINS`和`PINDIRS`使用`OUT`的引脚映射。
+
+若开启了autopull，`OUT`在达到了移位阈值（`SHIFTCTRL_PULL_THRESH`）时会自动把TX FIFO数据pull到OSR，同时输出移位计数器清零。这时，如果TX FIFO为空，`OUT`会暂停状态机执行；不为空，那么该指令也只需要一个时钟周期，即使多进行了一个操作。
+
+`OUT EXEC`允许从FIFO数据流中引入指令。`OUT`本身需要一个周期，运行OSR中的指令也需要一个周期。指令类型没有限制。最初的那个`OUT`指令的延迟周期被忽略，但被插入运行的指令的延迟会正常发生。
+
+`OUT PC`无条件跳转到OSR中的地址。
+
+#### 汇编语法
+
+*out \<destination\>, \<bit_count\>*  
+
+其中：
+
+*\<destination\>* 是上面提到的目的地。
+
+*\<bit_count\>* 指定移出位数。
+
+### PUSH
+
+#### 操作
+
+把ISR中的数据（一个32比特的字）推送到RX FIFO，同时把ISR清零。
+
+* `IfFull`：如果是1，除非输入移位计数达到阈值`SHIFTCTRL_PUSH_THRESH`（和autopush一样），否则什么都不做（即仅在ISR有足够数据时才推送）。
+* `Block`：如果是1，在RX FIFO满时暂停状态机。
+
+`PUSH IFFULL`让程序更健壮，就像autopush一样。在这种情况下有用：如果autopush开启，IN可能在一个不合适的时机暂停状态机（`IN`前`PUSH IFFULL`既可以防止ISR满而暂停，也不会在ISR未满时清除已有数据）。例如，如果状态机正在断言一些外部控制信号的时候。
+
+PIO汇编器自动设置`Block`位。如果`Block`位未设置，`PUSH`不会在RX FIFO满时暂停状态机，而是立即继续执行下一条指令，且FIFO的状态和内容都不改变。ISR仍然被清零，`FDEBUG_RXSTALL`标志位被设置，表示数据丢失（与RX FIFO满时的阻塞的push或者autopush相同）。
+
+#### 汇编语法
+
+*push ( iffull )*  
+*push ( iffull ) block*  
+*push ( iffull ) noblock*  
+
+其中：
+
+*iffull* 即`IfFull == 1`，未指定时默认`IfFull == 0`。
+
+*block* 即`Block == 1`，同时这也是未指定时的默认设置。
+
+*noblock*  即`Block == 0`。
+
+### PULL
+
+#### 操作
+
+把一个32比特的字从TX FIFO加载进OSR。
+
+* `IfEmpty`：如果这个位为1，除非输出移位计数器达到移位阈值（`SHIFTCTRL_PULL_THRESH`，和autopull的一样），否则什么都不做（也就是说，仅在OSR中的数据移出后才可以执行`PULL`）。
+
+* `Block`：如果是1，在TX FIFO为空时暂停；如果是0，从一个空的FIFO取数据会把暂存寄存器X拷贝到OSR。
+
+一些外围设备，像UART、SPI等，在没有数据时暂停，有数据来时恢复；其他像I2S的时钟应该继续运行，最好输出占位符或者重复数据而不是停止时钟。这可以用`Block`来实现。
+
+非阻塞的`PULL`遇到空FIFO时的操作和`MOV OSR, X`相同。程序要么提前给X装入一个合适的默认值，或者每次`PULL NOBLOCK`之后都执行一次`MOV X, OSR`让FIFO中最后一个可用的字一直重复到新数据来为止。
+
+如果当TX FIFO为空时，开启了autopull的`OUT`指令在一个不合适的地方暂停，`PULL IFEMPTY`就会显出作用（`OUT`前`PULL IFEMPTY`既可以防止因为OSR没数据而暂停，也不会在OSR有数据时覆盖已有数据）。`IfEmpty`允许一些和autopull一样的程序简化，例如消除外循环计数器但在某些程序断点处暂停。
+
+> 当autopull开启，任何`pull`指令在OSR满时都是不操作的，这时`PULL`指令就像一个阻塞。`OUT NULL, 32`显式地删除OSR寄存器内容。
+
+#### 汇编语法
+
+*pull ( ifempty )*  
+*pull ( ifempty ) block*  
+*pull ( ifempty ) noblock*  
+
+其中：
+
+*ifempty* 代表`IfEmpty == 1`。不指定时默认为0。
+
+*block* 代表`Block == 1`。这也是不指定时的默认值。
+
+*noblock* 代表`Block == 0`。
+
+### IRQ
+
+#### 操作
+
+设置或者清零`Index`指定的IRQ标志位。
+
+* `Clear`：为1则清除`Index`指定的标志（设为低电平0），而不是升高电平1。如果设置了`Clear`，`Wait`位就不会起作用。
+* `Wait`：如果为1，暂停等待到设为1的标志位重新回到0为止，例如系统中断处理程序确认了这个中断。
+* `Index`：
+  * 3个低位指定了IRQ标号（从0到7），根据`Clear`位，IRQ标志位将被设置为1或者清零。
+  * 若最高位被设置，状态机的ID（从0到3）将被加在IRQ标号上（采用模4加最后两位的方式）。举例来说，状态机2的`Index`位域值为10001，那么将会设置第3号（标号从0开始）中断标志；10011则会设置第1号中断标志（11和10模4加得到01，结果就是001）。
+
+IRQ标志4~7只对状态机可见，0~3则可以作为PIO两个外部中断请求线中任意一个的系统级中断，由`IRQ0_INTE`和`IRQ1_INTE`配置。
+
+模加操作允许`IRQ`和`WAIT`指令的相对寻址，用于运行相同程序的状态机间的同步。3个最低位中最高的那个比特位不受此影响。
+
+如果指定了`Wait`，那么延迟在等待结束后开始。
+
+#### 汇编语法
+
+*irq \<irq_num\> ( rel )*  
+*irq set \<irq_num\> ( rel )*  
+*irq nowait \<irq_num\> ( rel )*  
+*irq wait \<irq_num\> ( rel )*  
+*irq clear \<irq_num\> ( rel )*  
+
+其中：
+
+*\<irq_num\>  ( rel )* 指定中断号。如果指定了*rel* ，实际的中断号通过把中断号低两位替换为原中断号低两位和状态机编号低两位模4加之后的结果得到，即把irq_num<sub>10</sub>替换为(irq_num<sub>10</sub>+sm_num<sub>10</sub>)。
+
+*irq* 表示设置中断标志但不等待。
+
+*irq set* 与*irq* 相同。
+
+*irq nowait* 与*irq* 相同。
+
+*irq wait* 设置中断标志且等待它被清零。
+
+*irq clear* 清零指定中断标志。
+
+### SET
+
+#### 操作
+
+立即将`Data`写入`Destination`。
+
+* `Destination`：
+  * 000：`PINS`
+  * 001：暂存寄存器`X`
+  * 010：暂存寄存器`Y`
+  * 011：保留
+  * 100：`PINDIRS`
+  * 101：保留
+  * 110：保留
+  * 111：保留
+* `Data`：5位的立即数，用于驱动引脚或写入寄存器。
+
+用于生成控制信号，例如时钟、片选信号等，或者初始化循环计数器。因为`Data`只有5位，暂存寄存器的值只能设为0~31，对32次迭代的循环足够了。
+
+`SET`和`OUT`的引脚映射是独立的，它们可以映射到不同位置，例如一个引脚作时钟，另一个作数据。也可以部分重叠：UART发送器可能使用`SET`设置开始或结束位，`OUT`指令使用同样的引脚移出FIFO数据。
+
+#### 汇编语法
+
+*set \<destination\>, \<value\>*  
+
+其中：
+
+*\<destination\>* 指定目的地。
+
+*\<value\>* 要设置的值（0~31）。
