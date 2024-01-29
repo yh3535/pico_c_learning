@@ -1,6 +1,6 @@
 # 为Pico SDK增加Fortran支持
 
-Pico SDK原生并没有加入对Fortran编译器的支持，但arm-none-eabi-gcc显然支持Fortran（注意，按照Pico官方文档在Debian上使用apt安装gcc-arm-none-eabi时所安装的包并不包含arm-none-eabi-gfortran，必须从arm官方页面https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads下载工具链才包含gfortran编译器）。因此需要对SDK中的CMake文件进行一定的修改。
+Pico SDK原生并没有加入对Fortran编译器的支持，但arm-none-eabi-gcc显然支持Fortran（注意，按照Pico官方文档在Debian上使用apt安装gcc-arm-none-eabi时所安装的包并不包含arm-none-eabi-gfortran，必须从[arm官方页面](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)下载工具链才包含gfortran编译器）。因此需要对SDK中的CMake文件进行一定的修改。
 
 首先在`pico-sdk/cmake/preload/toolchains/pico_arm_gcc.cmake`中加入对Fortran编译器的识别：
 
