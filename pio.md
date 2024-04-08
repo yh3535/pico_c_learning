@@ -371,7 +371,7 @@ static inline void ws2812_program_init(PIO pio, uint sm, uint offset, uint pin, 
 具体操作有：
 
 * `pio_gpio_init(pio, pin);`配置GPIO功能，告知其用于PIO。
-* `pio_set_consecutive_pindirs(pio, sm, pin, 1, true);`设置从`pin`开始的1个引脚输入输出方向为输出。
+* `pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);`设置从`pin`开始的1个引脚输入输出方向为输出。
 * `pio_sm_config c = ws2812_program_default_config(offset);`使用此程序的默认配置生成函数获取一个默认配置。默认配置包括`.wrap`和`.side_set`这样的信息。在把它加载进状态机之前还需要进一步的配置。
 * `sm_config_sideset_pins(&c, pin);`设置side-set引脚组的引脚从`pin`开始。side-set引脚数量是在`.pio`文件里面的`.side-set n`指定的，如果在PIO程序里面设置了n个side-set引脚，那么side-set引脚组就会包含`pin`，`pin+1`，`pin+2`，...，`pin+n-1`。
 * `sm_config_out_shift(&c, false, true, rgbw ? 32 : 24);`false表示从右向左移动，也就是说大端（most significant bit，MSB）先移出。true表示开启autopull。32或者24表示autopull触发的移出阈值（即可以移出的最大位数，到了这个位数就会自动重填），由`rgbw`决定。
